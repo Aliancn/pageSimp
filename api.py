@@ -23,17 +23,59 @@ app.add_middleware(
 
 
 class Item(BaseModel):
+    """
+    Args:
+        html (str): 输入的HTML文本
+        stream (bool): 是否使用流式响应
+        require (str): 输入的问题
+    """
     html: str
     stream: bool = False
+    require: str = None
 
 
-@app.post("/pagenavi/")
+@app.post("/navi/")
 async def process_item(item: Item):
+    if item.require != None:
+        agent_url = os.getenv("AGENT_URL")
+        key = "Bearer " + os.getenv("DIFY_KEY_AGENT_ZARO")
+
+        headers = {
+            "Authorization": key,
+            "Content-Type": "application/json"
+        }
+        user = os.getenv("DIFY_USER")
+
+        data = {}
+
+        try:
+            response = requests.post(
+                agent_url, headers=headers, json=data, stream=True)
+            # 检查Dify平台的响应状态
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=response.status_code, detail="Dify API request failed")
+
+            # 定义生成器函数，用于逐步转发Dify的流式响应
+            def generate():
+                for chunk in response.iter_content(chunk_size=None):
+                    if chunk:
+                        yield chunk
+            # 使用StreamingResponse实现流式转发
+            return StreamingResponse(
+                generate(),
+                media_type=response.headers.get(
+                    "Content-Type", "application/json")
+            )
+        except Exception as e:
+            print(f"发生错误: {str(e)}")
+            return HTTPException(status_code=500, detail=str(e))
+
     html_cleaned = await clean_html(item.html)
     html_md = convert_html(html_cleaned)
 
     workflow_url = os.getenv("WORKFLOW_URL")
-    key = os.getenv("DIFY_KEY")
+    key = os.getenv("DIFY_KEY_WORKFLOW_ZERO")
     key = "Bearer " + key
     headers = {
         "Authorization": key,
