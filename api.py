@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import os
+
 from clean import clean_html
 from convert import convert_html
 from fastapi import HTTPException
@@ -31,23 +32,30 @@ class Item(BaseModel):
         require (str): 输入的问题
     """
 
-    html: str
-    stream: bool = False
-    require: str = ""
+    html: str | None = None
+    stream: bool = True
+    require: str | None = None
 
 
-@app.post("/navi/")
+@app.post("/v1/navi")
 async def process_item(item: Item):
     if item.require is not None:
+        # 此处调用智能客服
         agent_url = os.getenv("AGENT_URL", "")
         key = "Bearer " + os.getenv("DIFY_KEY_AGENT_ZARO", "key-simple")
-
         headers = {"Authorization": key, "Content-Type": "application/json"}
-        user = os.getenv("DIFY_USER")
+        user = os.getenv("DIFY_USER", "default")
 
-        data = {}
+        data = {
+            "inputs": {},
+            "query": item.require,
+            "response_mode": "streaming",
+            "conversation_id": "",
+            "user": user + "agent",
+        }
 
         try:
+            print("正在运行agent", agent_url)
             response = requests.post(agent_url, headers=headers, json=data, stream=True)
             # 检查Dify平台的响应状态
             if response.status_code != 200:
@@ -69,69 +77,71 @@ async def process_item(item: Item):
         except Exception as e:
             print(f"发生错误: {str(e)}")
             return HTTPException(status_code=500, detail=str(e))
+    elif item.html is not None:
+        # 此处调用工作流，仅使用包含html的分支
+        html_cleaned = await clean_html(item.html)
+        html_md = convert_html(html_cleaned)
 
-    html_cleaned = await clean_html(item.html)
-    html_md = convert_html(html_cleaned)
+        workflow_url = os.getenv("WORKFLOW_URL", "http://localhost:18111")
+        key = os.getenv("DIFY_KEY_WORKFLOW_ZERO", "")
+        key = "Bearer " + key
+        headers = {"Authorization": key, "Content-Type": "application/json"}
+        user = os.getenv("DIFY_USER", "default")
 
-    workflow_url = os.getenv("WORKFLOW_URL")
-    key = os.getenv("DIFY_KEY_WORKFLOW_ZERO")
-    key = "Bearer " + key
-    headers = {"Authorization": key, "Content-Type": "application/json"}
-    user = os.getenv("DIFY_USER")
+        data = {
+            "inputs": {"text_input": "ali", "web_page": html_md},
+            "response_mode": "streaming" if item.stream else "blocking",
+            "user": user + "workflow",
+        }
 
-    data = {
-        "inputs": {"text_input": "ali", "web_page": html_md},
-        "response_mode": "streaming" if item.stream else "blocking",
-        "user": user,
-    }
-
-    if item.stream:
-        try:
-            print("运行工作流streaming...")
-            response = requests.post(
-                workflow_url, headers=headers, json=data, stream=True
-            )
-
-            # 检查Dify平台的响应状态
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=response.status_code, detail="Dify API request failed"
+        if item.stream:
+            try:
+                print("运行工作流streaming...", workflow_url)
+                response = requests.post(
+                    workflow_url, headers=headers, json=data, stream=True
                 )
 
-            # 定义生成器函数，用于逐步转发Dify的流式响应
-            def generate():
-                for chunk in response.iter_content(chunk_size=None):
-                    if chunk:
-                        yield chunk
+                # 检查Dify平台的响应状态
+                if response.status_code != 200:
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail="Dify API request failed",
+                    )
 
-            # 使用StreamingResponse实现流式转发
-            return StreamingResponse(
-                generate(),
-                media_type=response.headers.get("Content-Type", "application/json"),
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-    else:
-        try:
-            print("运行工作流blocking...")
-            response = requests.post(workflow_url, headers=headers, json=data)
-            if response.status_code == 200:
-                print("工作流执行成功")
-                return response.json()
-            else:
-                print(f"工作流执行失败，状态码: {response.status_code}")
-                return {
-                    "status": "error",
-                    "message": f"Failed to execute workflow, status code: {response.status_code}",
-                }
-        except Exception as e:
-            print(f"发生错误: {str(e)}")
-            return HTTPException(status_code=500, detail=str(e))
+                # 定义生成器函数，用于逐步转发Dify的流式响应
+                def generate():
+                    for chunk in response.iter_content(chunk_size=None):
+                        if chunk:
+                            yield chunk
+
+                # 使用StreamingResponse实现流式转发
+                return StreamingResponse(
+                    generate(),
+                    media_type=response.headers.get("Content-Type", "application/json"),
+                )
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
+        else:
+            try:
+                print("运行工作流blocking...")
+                response = requests.post(workflow_url, headers=headers, json=data)
+                if response.status_code == 200:
+                    print("工作流执行成功")
+                    return response.json()
+                else:
+                    print(f"工作流执行失败，状态码: {response.status_code}")
+                    return {
+                        "status": "error",
+                        "message": f"Failed to execute workflow, status code: {response.status_code}",
+                    }
+            except Exception as e:
+                print(f"发生错误: {str(e)}")
+                return HTTPException(status_code=500, detail=str(e))
 
 
 # 启动服务
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.getenv("PORT", 18001))
+    port = int(os.getenv("PORT", 18111))
     uvicorn.run(app, host="0.0.0.0", port=port)

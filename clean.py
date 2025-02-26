@@ -1,8 +1,7 @@
 from bs4 import BeautifulSoup
 import os
-import requests
+
 from playwright.async_api import async_playwright
-from convert import convert_html
 
 
 async def clean_html(html_content):
@@ -10,7 +9,7 @@ async def clean_html(html_content):
     soup = BeautifulSoup(html_content, "html.parser")
 
     # 查找所有的iframe标签
-    iframes = soup.find_all('iframe')
+    iframes = soup.find_all("iframe")
 
     # 使用 Playwright 加载 iframe 内容
     async with async_playwright() as p:
@@ -20,7 +19,7 @@ async def clean_html(html_content):
         page = await browser.new_page()
 
         for iframe in iframes:
-            src = iframe.get('src')
+            src = iframe.get("src")
             if src:
                 try:
                     # 导航到 iframe 的 URL
@@ -28,8 +27,7 @@ async def clean_html(html_content):
                     # 获取加载后的 HTML 内容
                     iframe_content = await page.content()
                     # 将 iframe 替换为加载后的 HTML 内容
-                    iframe.replace_with(BeautifulSoup(
-                        iframe_content, 'html.parser'))
+                    iframe.replace_with(BeautifulSoup(iframe_content, "html.parser"))
                 except Exception as e:
                     print(f"Failed to load iframe content from {src}: {e}")
                 finally:
@@ -57,7 +55,9 @@ async def clean_html(html_content):
             del tag[attribute]
 
     # 删除所有注释
-    for comment in soup.find_all(string=lambda text: isinstance(text, str) and text.startswith("<!--")):
+    for comment in soup.find_all(
+        string=lambda text: isinstance(text, str) and text.startswith("<!--")
+    ):
         comment.extract()
 
     # 删除所有空白节点
