@@ -34,12 +34,13 @@ class Item(BaseModel):
 
     html: str | None = None
     stream: bool = True
-    require: str | None = None
+    require_agent: str | None = None
+    require_workflow: str | None = None
 
 
 @app.post("/v1/navi")
 async def process_item(item: Item):
-    if item.require is not None:
+    if item.require_agent is not None:
         # 此处调用智能客服
         agent_url = os.getenv("AGENT_URL", "")
         key = "Bearer " + os.getenv("DIFY_KEY_AGENT_ZARO", "key-simple")
@@ -48,7 +49,7 @@ async def process_item(item: Item):
 
         data = {
             "inputs": {},
-            "query": item.require,
+            "query": item.require_agent,
             "response_mode": "streaming",
             "conversation_id": "",
             "user": user + "agent",
@@ -72,16 +73,12 @@ async def process_item(item: Item):
             # 使用StreamingResponse实现流式转发
             return StreamingResponse(
                 generate(),
-                media_type=response.headers.get("Content-Type", "application/json"),
+                media_type=response.headers.get("Content-Type", "text/event-stream"),
             )
         except Exception as e:
             print(f"发生错误: {str(e)}")
             return HTTPException(status_code=500, detail=str(e))
-    elif item.html is not None:
-        # 此处调用工作流，仅使用包含html的分支
-        html_cleaned = await clean_html(item.html)
-        html_md = convert_html(html_cleaned)
-
+    elif (item.html is not None) or (item.require_workflow is not None):
         workflow_url = os.getenv("WORKFLOW_URL", "http://localhost:18111")
         key = os.getenv("DIFY_KEY_WORKFLOW_ZERO", "")
         key = "Bearer " + key
@@ -89,14 +86,22 @@ async def process_item(item: Item):
         user = os.getenv("DIFY_USER", "default")
 
         data = {
-            "inputs": {"text_input": "ali", "web_page": html_md},
+            "inputs": {"text_input": None, "web_page": None},
             "response_mode": "streaming" if item.stream else "blocking",
             "user": user + "workflow",
         }
 
+        if item.require_workflow is not None:
+            data["inputs"]["text_input"] = item.require_workflow
+        else:
+            html_cleaned = await clean_html(item.html)
+            html_md = convert_html(html_cleaned)
+            data["inputs"]["text_input"] = "none"
+            data["inputs"]["web_page"] = html_md
         if item.stream:
             try:
                 print("运行工作流streaming...", workflow_url)
+                print("data", data)
                 response = requests.post(
                     workflow_url, headers=headers, json=data, stream=True
                 )
@@ -117,7 +122,9 @@ async def process_item(item: Item):
                 # 使用StreamingResponse实现流式转发
                 return StreamingResponse(
                     generate(),
-                    media_type=response.headers.get("Content-Type", "application/json"),
+                    media_type=response.headers.get(
+                        "Content-Type", "text/event-stream"
+                    ),
                 )
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
